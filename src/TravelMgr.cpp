@@ -479,10 +479,10 @@ std::string const WorldPosition::getAreaName(bool fullName, bool zoneName)
         }
     }
 
-    return std::move(areaName);
+    return areaName;
 }
 
-std::set<Transport*> WorldPosition::getTransports(uint32 entry)
+std::set<Transport*> WorldPosition::getTransports([[maybe_unused]] uint32 entry)
 {
     /*
     if (!entry)
@@ -648,7 +648,7 @@ void WorldPosition::loadMapAndVMap(uint32 mapId, uint8 x, uint8 y)
             if (!sTravelMgr->isBadVmap(mapId, x, y))
             {
                 // load VMAPs for current map/grid...
-                const MapEntry* i_mapEntry = sMapStore.LookupEntry(mapId);
+                [[maybe_unused]] const MapEntry* i_mapEntry = sMapStore.LookupEntry(mapId);
                 //const char* mapName = i_mapEntry ? i_mapEntry->name[sWorld->GetDefaultDbcLocale()] : "UNNAMEDMAP\x0"; //not used, (usage are commented out below), line marked for removal.
 
                 int vmapLoadResult = VMAP::VMapFactory::createOrGetVMapMgr()->loadMap(
@@ -1207,7 +1207,7 @@ bool QuestObjectiveTravelDestination::isActive(Player* bot)
         GuidVector targets = AI_VALUE(GuidVector, "possible targets");
 
         for (auto& target : targets)
-            if (target.GetEntry() == getEntry() && target.IsCreature() && botAI->GetCreature(target) &&
+            if (static_cast<int32>(target.GetEntry()) == getEntry() && target.IsCreature() && botAI->GetCreature(target) &&
                 botAI->GetCreature(target)->IsAlive())
                 return true;
 
@@ -1259,7 +1259,7 @@ bool RpgTravelDestination::isActive(Player* bot)
 
     for (ObjectGuid const guid : ignoreList)
     {
-        if (guid.GetEntry() == getEntry())
+        if (static_cast<int32>(guid.GetEntry()) == getEntry())
         {
             return false;
         }
@@ -1405,7 +1405,7 @@ bool BossTravelDestination::isActive(Player* bot)
         GuidVector targets = AI_VALUE(GuidVector, "possible targets");
 
         for (auto& target : targets)
-            if (target.GetEntry() == getEntry() && target.IsCreature() && botAI->GetCreature(target) &&
+            if (static_cast<int32>(target.GetEntry()) == getEntry() && target.IsCreature() && botAI->GetCreature(target) &&
                 botAI->GetCreature(target)->IsAlive())
                 return true;
 
@@ -3785,7 +3785,7 @@ uint32 TravelMgr::getDialogStatus(Player* pPlayer, int32 questgiver, Quest const
 
 // Selects a random WorldPosition from a list. Use a distance weighted distribution.
 std::vector<WorldPosition*> TravelMgr::getNextPoint(WorldPosition* center, std::vector<WorldPosition*> points,
-                                                    uint32 amount)
+                                                    [[maybe_unused]] uint32 amount)
 {
     std::vector<WorldPosition*> retVec;
 
@@ -4039,7 +4039,7 @@ std::vector<TravelDestination*> TravelMgr::getRpgTravelDestinations(Player* bot,
         retTravelLocations.push_back(dest);
     }
 
-    return std::move(retTravelLocations);
+    return retTravelLocations;
 }
 
 std::vector<TravelDestination*> TravelMgr::getExploreTravelDestinations(Player* bot, bool ignoreFull,
