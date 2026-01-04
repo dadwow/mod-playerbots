@@ -241,6 +241,11 @@ public:
     uint32 randomBotAutoJoinBGRatedArena3v3Count;
     uint32 randomBotAutoJoinBGRatedArena5v5Count;
 
+    // Solo BG Bot Pool
+    bool enableSoloBgBotPool;
+    uint32 soloBgBotPoolSize;
+    bool fillEntireBg;
+
     bool randomBotLoginAtStartup;
     uint32 randomBotTeleLowerLevel, randomBotTeleHigherLevel;
     std::map<uint32, std::pair<uint32, uint32>> zoneBrackets;

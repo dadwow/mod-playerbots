@@ -1242,6 +1242,90 @@ void RandomPlayerbotMgr::CheckBgQueue()
         updateBGInstanceCount(BATTLEGROUND_QUEUE_WS, wsBrackets, randomBotAutoJoinBGWSCount);
     }
 
+    // Solo BG Bot Pool: Detect solo players and create bot pools
+    if (sPlayerbotAIConfig->enableSoloBgBotPool)
+    {
+        // Track players who left the queue to cleanup their bot pools
+        std::vector<ObjectGuid> playersToRemove;
+        for (auto& [playerGuid, pool] : playerBotPools)
+        {
+            bool playerStillInQueue = false;
+            for (Player* player : players)
+            {
+                if (player->GetGUID() == playerGuid && player->InBattlegroundQueue())
+                {
+                    // Check if still in the same queue
+                    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+                    {
+                        if (player->GetBattlegroundQueueTypeId(i) == pool.queueTypeId)
+                        {
+                            playerStillInQueue = true;
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+
+            if (!playerStillInQueue)
+                playersToRemove.push_back(playerGuid);
+        }
+
+        // Remove bot pools for players who left the queue
+        for (ObjectGuid playerGuid : playersToRemove)
+        {
+            RemoveBotPoolForPlayer(playerGuid);
+        }
+
+        // Check for solo players and create bot pools
+        for (Player* player : players)
+        {
+            if (!player->InBattlegroundQueue())
+                continue;
+
+            // Skip if player already in BG
+            if (player->InBattleground())
+                continue;
+
+            // Skip if player already has a bot pool
+            if (playerBotPools.find(player->GetGUID()) != playerBotPools.end())
+                continue;
+
+            for (uint8 queueSlot = 0; queueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueSlot)
+            {
+                BattlegroundQueueTypeId queueTypeId = player->GetBattlegroundQueueTypeId(queueSlot);
+                if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
+                    continue;
+
+                // Skip arenas for now - only handle battlegrounds
+                if (BattlegroundMgr::BGArenaType(queueTypeId))
+                    continue;
+
+                BattlegroundTypeId bgTypeId = sBattlegroundMgr->BGTemplateId(queueTypeId);
+                uint32 mapId = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId)->GetMapId();
+                PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(mapId, player->GetLevel());
+                if (!pvpDiff)
+                    continue;
+
+                BattlegroundBracketId bracketId = pvpDiff->GetBracketId();
+
+                // Check if player is alone in queue (no other real players in the same queue/bracket)
+                uint32 alliancePlayerCount = BattlegroundData[queueTypeId][bracketId].bgAlliancePlayerCount;
+                uint32 hordePlayerCount = BattlegroundData[queueTypeId][bracketId].bgHordePlayerCount;
+                uint32 totalPlayerCount = alliancePlayerCount + hordePlayerCount;
+
+                // Player is solo if they're the only one in queue
+                if (totalPlayerCount == 1)
+                {
+                    LOG_INFO("playerbots", "Player {} is solo in BG queue {} bracket {} - creating bot pool",
+                             player->GetName(), queueTypeId, bracketId);
+                    CreateBotPoolForPlayer(player, queueTypeId, bracketId);
+                    break;  // Only create one pool per player
+                }
+            }
+        }
+    }
+
     LogBattlegroundInfo();
 }
 
@@ -2994,6 +3078,9 @@ void RandomPlayerbotMgr::OnPlayerLogout(Player* player)
 {
     DisablePlayerBot(player->GetGUID());
 
+    // Cleanup bot pool for this player
+    RemoveBotPoolForPlayer(player->GetGUID());
+
     for (PlayerBotMap::const_iterator it = GetPlayerBotsBegin(); it != GetPlayerBotsEnd(); ++it)
     {
         Player* const bot = it->second;
@@ -3596,4 +3683,206 @@ ObjectGuid RandomPlayerbotMgr::GetBattleMasterGUID(Player* bot, BattlegroundType
     }
 
     return battleMasterGUID;
+}
+
+void RandomPlayerbotMgr::CreateBotPoolForPlayer(Player* player, BattlegroundQueueTypeId queueTypeId, BattlegroundBracketId bracketId)
+{
+    if (!player || !sPlayerbotAIConfig->enableSoloBgBotPool)
+        return;
+
+    ObjectGuid playerGuid = player->GetGUID();
+
+    // Check if player already has a bot pool
+    if (playerBotPools.find(playerGuid) != playerBotPools.end())
+        return;
+
+    BattlegroundTypeId bgTypeId = sBattlegroundMgr->BGTemplateId(queueTypeId);
+    Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+    if (!bg)
+        return;
+
+    uint32 maxPlayersPerTeam = bg->GetMaxPlayersPerTeam();
+    uint32 minPlayersPerTeam = bg->GetMinPlayersPerTeam();
+
+    // Determine how many bots to create
+    uint32 botsNeeded = sPlayerbotAIConfig->soloBgBotPoolSize;
+    if (sPlayerbotAIConfig->fillEntireBg)
+        botsNeeded = (maxPlayersPerTeam * 2) - 1;  // -1 for the player
+    else
+        botsNeeded = std::min(botsNeeded, (minPlayersPerTeam * 2) - 1);
+
+    // Get level range for this bracket
+    uint32 minLevel = BattlegroundData[queueTypeId][bracketId].minLevel;
+    uint32 maxLevel = BattlegroundData[queueTypeId][bracketId].maxLevel;
+
+    if (minLevel == 0 || maxLevel == 0)
+        return;
+
+    TeamId playerTeam = player->GetTeamId();
+    SoloBgBotPool pool;
+    pool.queueTypeId = queueTypeId;
+    pool.bracketId = bracketId;
+
+    LOG_INFO("playerbots", "Creating bot pool for player {} (Level {}) for BG queue {} bracket {}", 
+             player->GetName(), player->GetLevel(), queueTypeId, bracketId);
+
+    // Find available bots at appropriate level
+    std::vector<ObjectGuid::LowType> allianceBots;
+    std::vector<ObjectGuid::LowType> hordeBots;
+
+    for (auto& [guid, bot] : playerBots)
+    {
+        if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
+            continue;
+
+        // Skip if bot is in BG or already in queue
+        if (bot->InBattlegroundQueue() || bot->InBattleground())
+            continue;
+
+        // Skip if bot is already part of another player's pool
+        bool inOtherPool = false;
+        for (auto& [otherPlayerGuid, otherPool] : playerBotPools)
+        {
+            if (std::find(otherPool.botGuids.begin(), otherPool.botGuids.end(), guid) != otherPool.botGuids.end())
+            {
+                inOtherPool = true;
+                break;
+            }
+        }
+        if (inOtherPool)
+            continue;
+
+        // Check level range
+        uint32 botLevel = bot->GetLevel();
+        if (botLevel < minLevel || botLevel > maxLevel)
+            continue;
+
+        // Check if bot can join this BG
+        if (!bot->GetBGAccessByLevel(bgTypeId))
+            continue;
+
+        // Separate by faction
+        if (bot->GetTeamId() == TEAM_ALLIANCE)
+            allianceBots.push_back(guid);
+        else
+            hordeBots.push_back(guid);
+    }
+
+    // Calculate how many bots per faction we need
+    // Try to balance: player's faction needs (botsNeeded / 2), opposite faction needs (botsNeeded / 2) + 1
+    uint32 playerFactionBotsNeeded = botsNeeded / 2;
+    uint32 oppositeFactionBotsNeeded = botsNeeded - playerFactionBotsNeeded;
+
+    std::vector<ObjectGuid::LowType>& playerFactionBots = (playerTeam == TEAM_ALLIANCE) ? allianceBots : hordeBots;
+    std::vector<ObjectGuid::LowType>& oppositeFactionBots = (playerTeam == TEAM_ALLIANCE) ? hordeBots : allianceBots;
+
+    // Add bots from player's faction
+    uint32 added = 0;
+    for (uint32 i = 0; i < std::min((uint32)playerFactionBots.size(), playerFactionBotsNeeded); ++i)
+    {
+        pool.botGuids.push_back(playerFactionBots[i]);
+        added++;
+    }
+
+    // Add bots from opposite faction
+    for (uint32 i = 0; i < std::min((uint32)oppositeFactionBots.size(), oppositeFactionBotsNeeded); ++i)
+    {
+        pool.botGuids.push_back(oppositeFactionBots[i]);
+        added++;
+    }
+
+    if (pool.botGuids.empty())
+    {
+        LOG_INFO("playerbots", "No available bots found for player {} bot pool", player->GetName());
+        return;
+    }
+
+    LOG_INFO("playerbots", "Created bot pool with {} bots for player {}", added, player->GetName());
+
+    // Store the pool
+    playerBotPools[playerGuid] = pool;
+
+    // Queue the bots
+    for (ObjectGuid::LowType botGuid : pool.botGuids)
+    {
+        Player* bot = playerBots[botGuid];
+        if (!bot)
+            continue;
+
+        PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+        if (!botAI)
+            continue;
+
+        // Set BG type for bot to join
+        botAI->GetAiObjectContext()->GetValue<uint32>("bg type")->Set(queueTypeId);
+    }
+}
+
+void RandomPlayerbotMgr::RemoveBotPoolForPlayer(ObjectGuid playerGuid)
+{
+    auto it = playerBotPools.find(playerGuid);
+    if (it == playerBotPools.end())
+        return;
+
+    SoloBgBotPool& pool = it->second;
+
+    LOG_INFO("playerbots", "Removing bot pool for player {} (GUID: {})", 
+             playerGuid.ToString(), playerGuid.GetCounter());
+
+    // Remove bots from queue
+    for (ObjectGuid::LowType botGuid : pool.botGuids)
+    {
+        Player* bot = playerBots[botGuid];
+        if (!bot)
+            continue;
+
+        PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+        if (!botAI)
+            continue;
+
+        // Clear BG type to stop queuing
+        botAI->GetAiObjectContext()->GetValue<uint32>("bg type")->Set(0);
+
+        // Leave queue if already in it
+        if (bot->InBattlegroundQueue())
+        {
+            for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+            {
+                BattlegroundQueueTypeId queueTypeId = bot->GetBattlegroundQueueTypeId(i);
+                if (queueTypeId == pool.queueTypeId)
+                {
+                    WorldPacket data;
+                    sBattlegroundMgr->BuildBattlegroundStatusNone(&data, bot, i, bot->GetBattlegroundQueueIndex(queueTypeId));
+                    bot->GetSession()->SendPacket(&data);
+                    bot->RemoveBattlegroundQueueId(queueTypeId);
+                }
+            }
+        }
+    }
+
+    // Remove the pool
+    playerBotPools.erase(it);
+}
+
+uint32 RandomPlayerbotMgr::GetSoloBgBotsCount(BattlegroundQueueTypeId queueTypeId, BattlegroundBracketId bracketId, TeamId teamId)
+{
+    uint32 count = 0;
+
+    for (auto& [playerGuid, pool] : playerBotPools)
+    {
+        if (pool.queueTypeId != queueTypeId || pool.bracketId != bracketId)
+            continue;
+
+        for (ObjectGuid::LowType botGuid : pool.botGuids)
+        {
+            Player* bot = playerBots[botGuid];
+            if (!bot)
+                continue;
+
+            if (bot->GetTeamId() == teamId)
+                count++;
+        }
+    }
+
+    return count;
 }
