@@ -3836,6 +3836,10 @@ void RandomPlayerbotMgr::RemoveBotPoolForPlayer(ObjectGuid playerGuid)
         if (!bot)
             continue;
 
+        // Don't remove bots that are already in a BG - let them finish
+        if (bot->InBattleground())
+            continue;
+
         PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
         if (!botAI)
             continue;
