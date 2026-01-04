@@ -3711,9 +3711,18 @@ void RandomPlayerbotMgr::CreateBotPoolForPlayer(Player* player, BattlegroundQueu
     else
         botsNeeded = std::min(botsNeeded, (minPlayersPerTeam * 2) - 1);
 
+    // Check if bracket exists in BattlegroundData
+    auto queueIt = BattlegroundData.find(queueTypeId);
+    if (queueIt == BattlegroundData.end())
+        return;
+    
+    auto bracketIt = queueIt->second.find(bracketId);
+    if (bracketIt == queueIt->second.end())
+        return;
+
     // Get level range for this bracket
-    uint32 minLevel = BattlegroundData[queueTypeId][bracketId].minLevel;
-    uint32 maxLevel = BattlegroundData[queueTypeId][bracketId].maxLevel;
+    uint32 minLevel = bracketIt->second.minLevel;
+    uint32 maxLevel = bracketIt->second.maxLevel;
 
     if (minLevel == 0 || maxLevel == 0)
         return;
@@ -3739,17 +3748,8 @@ void RandomPlayerbotMgr::CreateBotPoolForPlayer(Player* player, BattlegroundQueu
         if (bot->InBattlegroundQueue() || bot->InBattleground())
             continue;
 
-        // Skip if bot is already part of another player's pool
-        bool inOtherPool = false;
-        for (auto& [otherPlayerGuid, otherPool] : playerBotPools)
-        {
-            if (std::find(otherPool.botGuids.begin(), otherPool.botGuids.end(), guid) != otherPool.botGuids.end())
-            {
-                inOtherPool = true;
-                break;
-            }
-        }
-        if (inOtherPool)
+        // Skip if bot is already part of another player's pool (O(1) lookup)
+        if (botsInPools.find(guid) != botsInPools.end())
             continue;
 
         // Check level range
@@ -3781,6 +3781,7 @@ void RandomPlayerbotMgr::CreateBotPoolForPlayer(Player* player, BattlegroundQueu
     for (uint32 i = 0; i < std::min((uint32)playerFactionBots.size(), playerFactionBotsNeeded); ++i)
     {
         pool.botGuids.push_back(playerFactionBots[i]);
+        botsInPools.insert(playerFactionBots[i]);
         added++;
     }
 
@@ -3788,6 +3789,7 @@ void RandomPlayerbotMgr::CreateBotPoolForPlayer(Player* player, BattlegroundQueu
     for (uint32 i = 0; i < std::min((uint32)oppositeFactionBots.size(), oppositeFactionBotsNeeded); ++i)
     {
         pool.botGuids.push_back(oppositeFactionBots[i]);
+        botsInPools.insert(oppositeFactionBots[i]);
         added++;
     }
 
@@ -3826,23 +3828,32 @@ void RandomPlayerbotMgr::RemoveBotPoolForPlayer(ObjectGuid playerGuid)
 
     SoloBgBotPool& pool = it->second;
 
-    LOG_INFO("playerbots", "Removing bot pool for player {} (GUID: {})", 
-             playerGuid.ToString(), playerGuid.GetCounter());
+    LOG_INFO("playerbots", "Removing bot pool for player GUID: {}", playerGuid.GetCounter());
 
     // Remove bots from queue
     for (ObjectGuid::LowType botGuid : pool.botGuids)
     {
         Player* bot = playerBots[botGuid];
         if (!bot)
+        {
+            // Remove from set even if bot is not found
+            botsInPools.erase(botGuid);
             continue;
+        }
 
         // Don't remove bots that are already in a BG - let them finish
         if (bot->InBattleground())
+        {
+            botsInPools.erase(botGuid);
             continue;
+        }
 
         PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
         if (!botAI)
+        {
+            botsInPools.erase(botGuid);
             continue;
+        }
 
         // Clear BG type to stop queuing
         botAI->GetAiObjectContext()->GetValue<uint32>("bg type")->Set(0);
@@ -3862,6 +3873,9 @@ void RandomPlayerbotMgr::RemoveBotPoolForPlayer(ObjectGuid playerGuid)
                 }
             }
         }
+
+        // Remove from the tracking set
+        botsInPools.erase(botGuid);
     }
 
     // Remove the pool
