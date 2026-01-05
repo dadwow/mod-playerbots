@@ -344,12 +344,6 @@ bool PlayerbotAIConfig::Initialize()
         sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotAutoJoinBGRatedArena3v3Count", 0);
     randomBotAutoJoinBGRatedArena5v5Count =
         sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotAutoJoinBGRatedArena5v5Count", 0);
-
-    // Solo BG Bot Pool
-    enableSoloBgBotPool = sConfigMgr->GetOption<bool>("AiPlayerbot.EnableSoloBgBotPool", true);
-    soloBgBotPoolSize = sConfigMgr->GetOption<int32>("AiPlayerbot.SoloBgBotPoolSize", 9);
-    fillEntireBg = sConfigMgr->GetOption<bool>("AiPlayerbot.FillEntireBg", false);
-
     logInGroupOnly = sConfigMgr->GetOption<bool>("AiPlayerbot.LogInGroupOnly", true);
     logValuesPerTick = sConfigMgr->GetOption<bool>("AiPlayerbot.LogValuesPerTick", false);
     fleeingEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.FleeingEnabled", true);

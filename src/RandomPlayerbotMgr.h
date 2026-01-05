@@ -153,19 +153,6 @@ public:
     void CheckPlayers();
     void LogBattlegroundInfo();
 
-    // Solo BG Bot Pool Management
-    struct SoloBgBotPool
-    {
-        BattlegroundQueueTypeId queueTypeId;
-        BattlegroundBracketId bracketId;
-        std::vector<ObjectGuid::LowType> botGuids;
-    };
-    std::map<ObjectGuid, SoloBgBotPool> playerBotPools;  // player GUID -> bot pool
-    std::unordered_set<ObjectGuid::LowType> botsInPools;  // Fast lookup for bots in any pool
-    void CreateBotPoolForPlayer(Player* player, BattlegroundQueueTypeId queueTypeId, BattlegroundBracketId bracketId);
-    void RemoveBotPoolForPlayer(ObjectGuid playerGuid);
-    uint32 GetSoloBgBotsCount(BattlegroundQueueTypeId queueTypeId, BattlegroundBracketId bracketId, TeamId teamId);
-
     std::map<TeamId, std::map<BattlegroundTypeId, std::vector<uint32>>> getBattleMastersCache()
     {
         return BattleMastersCache;
