@@ -2164,3 +2164,53 @@ AiPlayerbot.SummonAtInnkeepersEnabled = 1
 # Buffs will be applied on PP, Sindragosa and Lich King
 
 AiPlayerbot.EnableICCBuffs = 1
+
+###################################################################################################
+# PVP AUTO-QUEUE AND BALANCING
+#
+# These settings control automatic bot queue filling for arenas and battlegrounds
+###################################################################################################
+
+#
+#    AiPlayerbot.Arena.AutoQueue
+#        Description: Enable automatic bot filling for arena queues
+#        Default:     1 (enabled)
+#                     0 (disabled)
+
+AiPlayerbot.Arena.AutoQueue = 1
+
+#
+#    AiPlayerbot.Arena.MaxBots
+#        Description: Maximum number of bots to add to arena queues per bracket
+#        Default:     10
+
+AiPlayerbot.Arena.MaxBots = 10
+
+#
+#    AiPlayerbot.Arena.RatingDelta
+#        Description: Maximum rating difference for bot matchmaking (±value)
+#        Default:     200
+
+AiPlayerbot.Arena.RatingDelta = 200
+
+#
+#    AiPlayerbot.BG.AutoBalance
+#        Description: Enable automatic team balancing in battlegrounds
+#        Default:     1 (enabled)
+#                     0 (disabled)
+
+AiPlayerbot.BG.AutoBalance = 1
+
+#
+#    AiPlayerbot.BG.MinRealPlayers
+#        Description: Minimum real players required before adding bots to battlegrounds
+#        Default:     5
+
+AiPlayerbot.BG.MinRealPlayers = 5
+
+#
+#    AiPlayerbot.BG.MaxBots
+#        Description: Maximum number of bots per battleground instance
+#        Default:     15
+
+AiPlayerbot.BG.MaxBots = 15
