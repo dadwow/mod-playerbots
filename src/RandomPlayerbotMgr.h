@@ -87,6 +87,10 @@ private:
 
 class RandomPlayerbotMgr : public PlayerbotHolder
 {
+    // PlusCraft: Allow PvP managers to access private methods
+    friend class ArenaQueueManager;
+    friend class BattlegroundBalancer;
+
 public:
     RandomPlayerbotMgr();
     virtual ~RandomPlayerbotMgr();
