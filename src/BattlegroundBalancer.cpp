@@ -6,6 +6,7 @@
 #include "BattlegroundMgr.h"
 #include "Log.h"
 #include "PlayerbotAI.h"
+#include "PlayerbotAIConfig.h"
 #include "PlayerbotFactory.h"
 #include "PlayerbotMgr.h"
 #include "RandomPlayerbotMgr.h"
@@ -13,27 +14,81 @@
 
 void BattlegroundBalancer::OnPlayerQueueBG(Player* player, BattlegroundTypeId bgTypeId)
 {
-    if (!m_enabled || !player)
-        return;
-
-    LOG_INFO("playerbots", "PlusCraft BG: Player {} queued for BG type {}", player->GetName(), bgTypeId);
-
-    // Get the battleground template
-    Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
-    if (!bg)
-        return;
-
-    // Check if there are enough real players before adding bots
-    uint32 totalPlayers = bg->GetPlayersSize();
-
-    if (totalPlayers >= m_minRealPlayers)
+    if (!m_enabled || !player || !sPlayerbotAIConfig->pluscraftEnabled || !sPlayerbotAIConfig->bgDynamicSpawn)
     {
-        BalanceBattleground(bg);
+        if (player && !sPlayerbotAIConfig->pluscraftEnabled)
+            LOG_DEBUG("playerbots", "PlusCraft BG: Ignoring queue - PlusCraft disabled");
+        else if (player && !sPlayerbotAIConfig->bgDynamicSpawn)
+            LOG_DEBUG("playerbots", "PlusCraft BG: Ignoring queue - BG dynamic spawn disabled");
+        return;
+    }
+
+    LOG_INFO("playerbots", "╔════════════════════════════════════════════════╗");
+    LOG_INFO("playerbots", "║  PlusCraft: Real Player Queued for BG          ║");
+    LOG_INFO("playerbots", "╟────────────────────────────────────────────────╢");
+    LOG_INFO("playerbots", "║  Player: {:<38} ║", player->GetName());
+    LOG_INFO("playerbots", "║  Player Level: {:<32} ║", player->GetLevel());
+    LOG_INFO("playerbots", "║  BG Type: {:<37} ║", bgTypeId);
+
+    // Get minimum players needed for this BG type
+    Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+    if (!bgTemplate)
+    {
+        LOG_ERROR("playerbots", "║  ERROR: BG template not found!                 ║");
+        LOG_INFO("playerbots", "╚════════════════════════════════════════════════╝");
+        return;
+    }
+
+    // Get the player's level bracket for this BG
+    uint32 mapId = bgTemplate->GetMapId();
+    PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(mapId, player->GetLevel());
+    if (!bracketEntry)
+    {
+        LOG_ERROR("playerbots", "║  ERROR: No bracket found for level {}!        ║", player->GetLevel());
+        LOG_INFO("playerbots", "╚════════════════════════════════════════════════╝");
+        return;
+    }
+
+    uint32 minLevel = bracketEntry->minLevel;
+    uint32 maxLevel = bracketEntry->maxLevel;
+    BattlegroundBracketId bracketId = bracketEntry->GetBracketId();
+
+    uint32 minPlayers = bgTemplate->GetMinPlayersPerTeam() * 2; // Total for both teams
+    uint32 maxPlayers = bgTemplate->GetMaxPlayersPerTeam() * 2;
+
+    LOG_INFO("playerbots", "║  Level Bracket: {}-{} (ID: {})                 ║", minLevel, maxLevel, bracketId);
+    LOG_INFO("playerbots", "║  Min Players: {:<32} ║", minPlayers);
+    LOG_INFO("playerbots", "║  Max Players: {:<32} ║", maxPlayers);
+
+    // Calculate how many bots we need to spawn to fill the BG
+    // We'll spawn enough to reach minimum, with balanced teams
+    uint32 botsToSpawn = minPlayers - 1; // -1 for the real player who just queued
+
+    LOG_INFO("playerbots", "║  Bots to spawn: {:<28} ║", botsToSpawn);
+    LOG_INFO("playerbots", "╟────────────────────────────────────────────────╢");
+
+    if (botsToSpawn > 0 && botsToSpawn <= maxPlayers)
+    {
+        LOG_INFO("playerbots", "║  Requesting bot spawn from RandomPlayerbotMgr  ║");
+        LOG_INFO("playerbots", "╚════════════════════════════════════════════════╝");
+
+        // Use RandomPlayerbotMgr to spawn bots dynamically with BG type and level range
+        uint32 spawned = sRandomPlayerbotMgr->AddRandomBotsForPvP(botsToSpawn, bgTypeId, minLevel, maxLevel);
+
+        LOG_INFO("playerbots", "PlusCraft BG: Result - spawned {}/{} bots", spawned, botsToSpawn);
+
+        if (spawned < botsToSpawn)
+        {
+            LOG_WARN("playerbots", "PlusCraft BG: WARNING - Only spawned {}/{} requested bots", spawned, botsToSpawn);
+        }
+
+        // TODO: Make the spawned bots actually queue for this specific BG
+        // This might require additional logic in RandomPlayerbotMgr to queue bots after spawning
     }
     else
     {
-        LOG_INFO("playerbots", "PlusCraft BG: Waiting for {} real players (current: {})", m_minRealPlayers,
-                 totalPlayers);
+        LOG_WARN("playerbots", "║  SKIPPED: Invalid bot count ({})              ║", botsToSpawn);
+        LOG_INFO("playerbots", "╚════════════════════════════════════════════════╝");
     }
 }
 
@@ -125,9 +180,19 @@ void BattlegroundBalancer::AddBotsToTeam(BattlegroundTypeId bgTypeId, TeamId fac
     {
         LOG_INFO("playerbots", "PlusCraft BG: Need to spawn {} additional bots", botsNeeded);
 
-        for (uint32 i = 0; i < botsNeeded; ++i)
+        // Use dynamic spawning if PlusCraft is enabled
+        if (sPlayerbotAIConfig->pluscraftEnabled && sPlayerbotAIConfig->bgDynamicSpawn)
         {
-            randomMgr->AddRandomBots();
+            uint32 spawned = randomMgr->AddRandomBotsForPvP(botsNeeded);
+            LOG_INFO("playerbots", "PlusCraft BG: Dynamically spawned {} bots for PvP", spawned);
+        }
+        else
+        {
+            // Fallback: Trigger RandomPlayerbotMgr to add more bots (limited by MaxRandomBots)
+            for (uint32 i = 0; i < botsNeeded; ++i)
+            {
+                randomMgr->AddRandomBots();
+            }
         }
     }
 
@@ -208,7 +273,7 @@ void BattlegroundBalancer::RemoveBotsFromTeam(Battleground* bg, TeamId faction, 
         Player* bot = ObjectAccessor::FindPlayer(*botIt);
         if (bot && bot->GetTeamId() == faction)
         {
-            bg->RemovePlayerAtLeave(*botIt, false, true);
+            bg->RemovePlayerAtLeave(bot);
             botIt = bots.erase(botIt);
             removed++;
             LOG_DEBUG("playerbots", "PlusCraft BG: Removed bot from team");
@@ -313,7 +378,7 @@ void BattlegroundBalancer::Update()
     // Clean up finished battlegrounds
     for (auto it = m_botsInBG.begin(); it != m_botsInBG.end();)
     {
-        Battleground* bg = sBattlegroundMgr->GetBattleground(it->first);
+        Battleground* bg = sBattlegroundMgr->GetBattleground(it->first, BATTLEGROUND_TYPE_NONE);
         if (!bg || bg->GetStatus() == STATUS_WAIT_LEAVE)
         {
             LOG_DEBUG("playerbots", "PlusCraft BG: Cleaning up finished BG {}, removed {} bots", it->first,
@@ -325,4 +390,21 @@ void BattlegroundBalancer::Update()
             ++it;
         }
     }
+}
+
+void BattlegroundBalancer::OnBattlegroundEnd(Battleground* bg)
+{
+    if (!m_enabled || !bg)
+        return;
+
+    auto it = m_botsInBG.find(bg->GetInstanceID());
+    if (it == m_botsInBG.end())
+        return;
+
+    LOG_INFO("playerbots", "PlusCraft BG: Battleground {} ended, marking {} bots for cleanup", bg->GetInstanceID(),
+             it->second.size());
+
+    // Tell RandomPlayerbotMgr to check these bots for cleanup
+    // They'll be removed during the next periodic cleanup if idle
+    m_botsInBG.erase(it);
 }

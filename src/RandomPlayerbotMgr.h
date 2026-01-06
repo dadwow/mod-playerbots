@@ -6,10 +6,14 @@
 #ifndef _PLAYERBOT_RANDOMPLAYERBOTMGR_H
 #define _PLAYERBOT_RANDOMPLAYERBOTMGR_H
 
+#include <unordered_map>
+#include <unordered_set>
+
 #include "NewRpgInfo.h"
 #include "ObjectGuid.h"
 #include "PlayerbotMgr.h"
 #include "GameTime.h"
+#include "BattlegroundMgr.h"
 
 struct BattlegroundInfo
 {
@@ -217,6 +221,10 @@ private:
     time_t DelayLoginBotsTimer;
     time_t printStatsTimer;
     uint32 AddRandomBots();
+    uint32 AddRandomBotsForPvP(uint32 count, BattlegroundTypeId bgTypeId = BATTLEGROUND_TYPE_NONE, uint32 minLevel = 1, uint32 maxLevel = 80);  // PlusCraft: Spawn bots dynamically for PvP
+    uint32 CreateBotsForPvP(uint32 count, uint32 minLevel, uint32 maxLevel);  // PlusCraft: Auto-create bot characters for PvP
+    void RemovePvPBots();                       // PlusCraft: Remove PvP-spawned bots
+    void CleanupIdlePvPBots();                  // PlusCraft: Remove idle PvP bots
     bool ProcessBot(uint32 bot);
     void ScheduleRandomize(uint32 bot, uint32 time);
     void RandomTeleport(Player* bot);
@@ -237,6 +245,11 @@ private:
     // Account lists
     std::vector<uint32> rndBotTypeAccounts;             // Accounts marked as RNDbot (type 1)
     std::vector<uint32> addClassTypeAccounts;           // Accounts marked as AddClass (type 2)
+
+    // PlusCraft: PvP bot tracking
+    std::unordered_set<uint32> pvpSpawnedBots;          // GUIDs of bots spawned for PvP
+    std::unordered_map<uint32, time_t> pvpBotSpawnTime; // GUID -> spawn timestamp
+    time_t lastPvPBotCleanup = 0;
 
     //void ScaleBotActivity();      // Deprecated function
     static inline uint32 NowSeconds() { return static_cast<uint32>(GameTime::GetGameTime().count()); }

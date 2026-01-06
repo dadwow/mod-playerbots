@@ -7,6 +7,7 @@
 #include "BattlegroundMgr.h"
 #include "Log.h"
 #include "PlayerbotAI.h"
+#include "PlayerbotAIConfig.h"
 #include "PlayerbotFactory.h"
 #include "PlayerbotMgr.h"
 #include "RandomPlayerbotMgr.h"
@@ -63,10 +64,19 @@ void ArenaQueueManager::FillArenaQueue(uint8 arenaType, uint8 neededCount, uint3
     {
         LOG_INFO("playerbots", "PlusCraft Arena: Need to spawn {} additional bots", botsNeeded);
 
-        // Trigger RandomPlayerbotMgr to add more bots
-        for (uint32 i = 0; i < botsNeeded; ++i)
+        // Use dynamic spawning if PlusCraft is enabled
+        if (sPlayerbotAIConfig->pluscraftEnabled && sPlayerbotAIConfig->arenaDynamicSpawn)
         {
-            randomMgr->AddRandomBots();
+            uint32 spawned = randomMgr->AddRandomBotsForPvP(botsNeeded);
+            LOG_INFO("playerbots", "PlusCraft Arena: Dynamically spawned {} bots for PvP", spawned);
+        }
+        else
+        {
+            // Fallback: Trigger RandomPlayerbotMgr to add more bots (limited by MaxRandomBots)
+            for (uint32 i = 0; i < botsNeeded; ++i)
+            {
+                randomMgr->AddRandomBots();
+            }
         }
 
         // Note: Newly added bots will be picked up on next Update() cycle
@@ -136,7 +146,7 @@ void ArenaQueueManager::RemoveBotsFromArena(uint32 instanceId)
 
         if (Battleground* bg = bot->GetBattleground())
         {
-            bg->RemovePlayerAtLeave(botGuid, false, true);
+            bg->RemovePlayerAtLeave(bot);
             LOG_DEBUG("playerbots", "PlusCraft Arena: Removed bot from arena");
         }
     }
@@ -205,7 +215,7 @@ void ArenaQueueManager::Update()
     for (auto arenaIt = m_botsInArena.begin(); arenaIt != m_botsInArena.end();)
     {
         uint32 instanceId = arenaIt->first;
-        Battleground* bg = sBattlegroundMgr->GetBattleground(instanceId);
+        Battleground* bg = sBattlegroundMgr->GetBattleground(instanceId, BATTLEGROUND_TYPE_NONE);
 
         // If arena is finished or doesn't exist, clean up
         if (!bg || bg->GetStatus() == STATUS_WAIT_LEAVE)
@@ -218,4 +228,20 @@ void ArenaQueueManager::Update()
             ++arenaIt;
         }
     }
+}
+
+void ArenaQueueManager::OnArenaEnd(uint32 instanceId)
+{
+    if (!m_enabled)
+        return;
+
+    auto it = m_botsInArena.find(instanceId);
+    if (it == m_botsInArena.end())
+        return;
+
+    LOG_INFO("playerbots", "PlusCraft Arena: Arena {} ended, marking bots for cleanup", instanceId);
+
+    // Tell RandomPlayerbotMgr to check these bots for cleanup
+    // They'll be removed during the next periodic cleanup if idle
+    m_botsInArena.erase(it);
 }

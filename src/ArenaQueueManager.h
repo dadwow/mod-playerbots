@@ -61,6 +61,12 @@ public:
     void Update();
 
     /**
+     * Called when an arena ends to cleanup bots
+     * @param instanceId The arena instance ID
+     */
+    void OnArenaEnd(uint32 instanceId);
+
+    /**
      * Enable/disable arena auto-queue feature
      * @param enabled true to enable
      */

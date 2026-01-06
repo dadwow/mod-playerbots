@@ -475,6 +475,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             // activatePrintStatsThread();
         }
     }
+
+    // PlusCraft: Periodic cleanup of idle PvP bots
+    if (sPlayerbotAIConfig->pluscraftEnabled && time(nullptr) > (lastPvPBotCleanup + 60))
+    {
+        CleanupIdlePvPBots();
+        lastPvPBotCleanup = time(nullptr);
+    }
+
     uint32 updateBots = sPlayerbotAIConfig->randomBotsPerInterval * onlineBotFocus / 100;
     uint32 maxNewBots =
         onlineBotCount < maxAllowedBotCount &&
@@ -890,6 +898,579 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
     }
 
     return currentBots.size();
+}
+
+// PlusCraft: Add random bots dynamically for PvP, bypassing normal bot count limits
+uint32 RandomPlayerbotMgr::AddRandomBotsForPvP(uint32 count, BattlegroundTypeId bgTypeId, uint32 minLevel, uint32 maxLevel)
+{
+    if (!sPlayerbotAIConfig->pluscraftEnabled || count == 0)
+    {
+        LOG_DEBUG("playerbots", "PlusCraft: AddRandomBotsForPvP called but PlusCraft disabled or count=0");
+        return 0;
+    }
+
+    LOG_INFO("playerbots", "╔════════════════════════════════════════════════╗");
+    LOG_INFO("playerbots", "║  PlusCraft: Dynamic Bot Spawn Request          ║");
+    LOG_INFO("playerbots", "╟────────────────────────────────────────────────╢");
+    LOG_INFO("playerbots", "║  Requested: {} bots for BG type {}             ║", count, bgTypeId);
+    LOG_INFO("playerbots", "║  Level Range: {}-{}                            ║", minLevel, maxLevel);
+
+    // Single RNG instance for all shuffling
+    std::mt19937 rng(std::chrono::steady_clock::now().time_since_epoch().count());
+
+    // Calculate faction split (50/50 for PvP)
+    uint32 allowedAllianceCount = count / 2;
+    if (count % 2 && urand(0, 1))
+        allowedAllianceCount++;
+
+    // Use all available accounts
+    std::vector<uint32> accountsToUse = rndBotTypeAccounts;
+
+    if (accountsToUse.empty())
+    {
+        LOG_ERROR("playerbots", "║  ERROR: No bot accounts configured!            ║");
+        LOG_INFO("playerbots", "╚════════════════════════════════════════════════╝");
+        return 0;
+    }
+
+    // Pre-map all characters from selected accounts
+    struct CharacterInfo
+    {
+        uint32 guid;
+        uint8 rClass;
+        uint8 rRace;
+        uint8 level;
+        uint32 accountId;
+    };
+    std::vector<CharacterInfo> allCharacters;
+
+    for (uint32 accountId : accountsToUse)
+    {
+        CharacterDatabasePreparedStatement* stmt =
+            CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARS_BY_ACCOUNT_ID);
+        if (!stmt)
+        {
+            LOG_ERROR("playerbots", "PlusCraft: Failed to get prepared statement CHAR_SEL_CHARS_BY_ACCOUNT_ID");
+            continue;
+        }
+        stmt->SetData(0, accountId);
+        PreparedQueryResult result = CharacterDatabase.Query(stmt);
+        if (!result)
+            continue;
+
+        do
+        {
+            Field* fields = result->Fetch();
+            CharacterInfo info;
+            info.guid = fields[0].Get<uint32>();
+            info.rClass = fields[1].Get<uint8>();
+            info.rRace = fields[2].Get<uint8>();
+            info.level = fields[3].Get<uint8>();  // Get level from DB
+            info.accountId = accountId;
+            
+            // Filter by level bracket
+            if (info.level < minLevel || info.level > maxLevel)
+                continue;
+            
+            allCharacters.push_back(info);
+        } while (result->NextRow());
+    }
+
+    // Shuffle for class balance
+    std::shuffle(allCharacters.begin(), allCharacters.end(), rng);
+
+    // Separate characters by faction
+    std::vector<CharacterInfo> allianceChars;
+    std::vector<CharacterInfo> hordeChars;
+
+    for (auto const& charInfo : allCharacters)
+    {
+        // Skip bots already logged in
+        if (GetPlayerBot(charInfo.guid))
+            continue;
+
+        if (IsAlliance(charInfo.rRace))
+            allianceChars.push_back(charInfo);
+        else
+            hordeChars.push_back(charInfo);
+    }
+
+    LOG_INFO("playerbots", "║  Available in bracket: {} Alliance, {} Horde   ║", allianceChars.size(), hordeChars.size());
+    
+    if (allianceChars.empty() && hordeChars.empty())
+    {
+        LOG_WARN("playerbots", "║  WARNING: No bots available! Attempting auto-creation... ║");
+        
+        // Try to auto-create characters
+        uint32 shortage = count - (allianceChars.size() + hordeChars.size());
+        uint32 created = CreateBotsForPvP(shortage, minLevel, maxLevel);
+        
+        if (created > 0)
+        {
+            LOG_INFO("playerbots", "║  Auto-created {} character(s). Re-querying...  ║", created);
+            
+            // Re-query database to get newly created characters
+            allianceChars.clear();
+            hordeChars.clear();
+            allCharacters.clear();
+            
+            for (uint32 accountId : accountsToUse)
+            {
+                CharacterDatabasePreparedStatement* stmt =
+                    CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARS_BY_ACCOUNT_ID);
+                if (!stmt)
+                    continue;
+                    
+                stmt->SetData(0, accountId);
+                PreparedQueryResult result = CharacterDatabase.Query(stmt);
+                if (!result)
+                    continue;
+
+                do
+                {
+                    Field* fields = result->Fetch();
+                    if (!fields)
+                        continue;
+                    CharacterInfo info;
+                    info.guid = fields[0].Get<uint32>();
+                    info.rClass = fields[1].Get<uint8>();
+                    info.rRace = fields[2].Get<uint8>();
+                    info.level = fields[3].Get<uint8>();
+                    info.accountId = accountId;
+                    
+                    // Filter by level bracket
+                    if (info.level < minLevel || info.level > maxLevel)
+                        continue;
+                    
+                    // Skip bots already logged in
+                    if (GetPlayerBot(info.guid))
+                        continue;
+                    
+                    if (IsAlliance(info.rRace))
+                        allianceChars.push_back(info);
+                    else
+                        hordeChars.push_back(info);
+                        
+                } while (result->NextRow());
+            }
+            
+            LOG_INFO("playerbots", "║  After creation: {} Alliance, {} Horde        ║", allianceChars.size(), hordeChars.size());
+        }
+        
+        if (allianceChars.empty() && hordeChars.empty())
+        {
+            LOG_ERROR("playerbots", "║  ERROR: Still no bots available after auto-creation! ║");
+            LOG_INFO("playerbots", "╚════════════════════════════════════════════════╝");
+            return 0;
+        }
+    }
+    
+    LOG_INFO("playerbots", "╟────────────────────────────────────────────────╢");
+
+    // Login helper - now forces immediate login
+    auto tryLoginBot = [this, bgTypeId](CharacterInfo const& charInfo) -> bool
+    {
+        // Safety check: validate GUID
+        if (charInfo.guid == 0)
+        {
+            LOG_ERROR("playerbots", "PlusCraft: Invalid character GUID 0, skipping");
+            return false;
+        }
+        
+        // Check if already logged in
+        ObjectGuid botGUID = ObjectGuid::Create<HighGuid::Player>(charInfo.guid);
+        if (GetPlayerBot(botGUID))
+        {
+            LOG_DEBUG("playerbots", "PlusCraft: Bot #{} already logged in, skipping", charInfo.guid);
+            return false;
+        }
+        
+        SetEventValue(charInfo.guid, "login", 1, 0);
+        SetEventValue(charInfo.guid, "add", 1, sPlayerbotAIConfig->permanentlyInWorldTime);
+        SetEventValue(charInfo.guid, "logout", 0, 0);
+        currentBots.push_back(charInfo.guid);
+        
+        // PlusCraft: Track this bot as PvP-spawned
+        pvpSpawnedBots.insert(charInfo.guid);
+        pvpBotSpawnTime[charInfo.guid] = time(nullptr);
+        
+        // IMMEDIATELY spawn the bot (don't wait for update cycle)
+        AddPlayerBot(botGUID, 0);
+        
+        // Give the bot a moment to fully load, then queue for BG
+        Player* bot = GetPlayerBot(botGUID);
+        if (bot)
+        {
+            LOG_INFO("playerbots", "║  ✓ Bot {} logged in immediately                ║", bot->GetName());
+            
+            // TODO: Queue bot for specific BG type after spawn
+            // For now, the CheckBgQueue cycle will handle it
+        }
+        else
+        {
+            LOG_WARN("playerbots", "║  ✗ Bot #{} failed to spawn immediately        ║", charInfo.guid);
+        }
+        
+        return true;
+    };
+
+    uint32 botsAdded = 0;
+
+    // Login Alliance bots
+    for (auto const& charInfo : allianceChars)
+    {
+        if (botsAdded >= allowedAllianceCount)
+            break;
+
+        if (tryLoginBot(charInfo))
+            botsAdded++;
+    }
+
+    // Login Horde bots
+    uint32 hordeTarget = count - botsAdded;
+    for (auto const& charInfo : hordeChars)
+    {
+        if (botsAdded >= count)
+            break;
+
+        if (tryLoginBot(charInfo))
+            botsAdded++;
+    }
+    
+    // Safety check before accessing BG data
+    if (allianceChars.empty() && hordeChars.empty())
+    {
+        LOG_ERROR("playerbots", "║  CRITICAL: No characters available after login attempts! ║");
+        LOG_INFO("playerbots", "╚════════════════════════════════════════════════╝");
+        return 0;
+    }
+
+    LOG_INFO("playerbots", "╟────────────────────────────────────────────────╢");
+    LOG_INFO("playerbots", "║  RESULT: Spawned {}/{} bots                    ║", botsAdded, count);
+    
+    if (botsAdded < count)
+    {
+        uint32 shortage = count - botsAdded;
+        LOG_WARN("playerbots", "║  WARNING: {} bots short! Need more chars in   ║", shortage);
+        LOG_WARN("playerbots", "║           level range {}-{} on bot accounts      ║", minLevel, maxLevel);
+        
+        // Provide actionable advice
+        if (allianceChars.size() + hordeChars.size() < count)
+        {
+            LOG_WARN("playerbots", "║  ACTION NEEDED: Create more level {}-{} chars  ║", minLevel, maxLevel);
+            LOG_WARN("playerbots", "║                 on bot accounts in database      ║");
+        }
+        else
+        {
+            LOG_WARN("playerbots", "║  NOTE: Bots exist but may already be online   ║");
+        }
+    }
+    
+    LOG_INFO("playerbots", "║  Total PvP bots tracked: {}                    ║", pvpSpawnedBots.size());
+    LOG_INFO("playerbots", "╚════════════════════════════════════════════════╝");
+
+    return botsAdded;
+}
+
+// PlusCraft: Auto-create bot characters for PvP when database has insufficient bots
+uint32 RandomPlayerbotMgr::CreateBotsForPvP(uint32 count, uint32 minLevel, uint32 maxLevel)
+{
+    if (!sPlayerbotAIConfig->pluscraftEnabled || count == 0)
+    {
+        LOG_DEBUG("playerbots", "CreateBotsForPvP: PlusCraft disabled or count=0");
+        return 0;
+    }
+
+    LOG_INFO("playerbots", "PlusCraft: Auto-creating {} bot character(s) for level range {}-{}", count, minLevel, maxLevel);
+
+    // Discover bot accounts using account prefix pattern (like RandomPlayerbotFactory does)
+    std::vector<uint32> accountsToUse;
+    uint32 totalAccountCount = RandomPlayerbotFactory::CalculateTotalAccountCount();
+    
+    for (uint32 accountNumber = 0; accountNumber < totalAccountCount; ++accountNumber)
+    {
+        std::ostringstream out;
+        out << sPlayerbotAIConfig->randomBotAccountPrefix << accountNumber;
+        std::string const accountName = out.str();
+
+        LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_GET_ACCOUNT_ID_BY_USERNAME);
+        if (!stmt)
+            continue;
+            
+        stmt->SetData(0, accountName);
+        PreparedQueryResult result = LoginDatabase.Query(stmt);
+        if (!result)
+            continue;
+
+        Field* fields = result->Fetch();
+        if (!fields)
+            continue;
+        uint32 accountId = fields[0].Get<uint32>();
+
+        uint32 charCount = AccountMgr::GetCharactersCount(accountId);
+        if (charCount < 10) // Max 10 chars per account
+        {
+            accountsToUse.push_back(accountId);
+        }
+    }
+
+    if (accountsToUse.empty())
+    {
+        LOG_ERROR("playerbots", "PlusCraft: No bot accounts with available character slots!");
+        LOG_ERROR("playerbots", "         Checked {} bot accounts (prefix: {})", totalAccountCount, sPlayerbotAIConfig->randomBotAccountPrefix);
+        LOG_ERROR("playerbots", "         All accounts have 10 characters each or no accounts exist.");
+        LOG_ERROR("playerbots", "         ACTION: Increase RandomBotAccountCount in config or delete some bot characters.");
+        return 0;
+    }
+
+    // Calculate maximum characters we can actually create
+    uint32 maxCanCreate = 0;
+    for (uint32 accountId : accountsToUse)
+    {
+        uint32 charCount = AccountMgr::GetCharactersCount(accountId);
+        maxCanCreate += (10 - charCount);
+    }
+    
+    uint32 toCreate = std::min(count, maxCanCreate);
+    if (toCreate < count)
+    {
+        LOG_WARN("playerbots", "PlusCraft: Can only create {}/{} chars (limited by account slots)", toCreate, count);
+    }
+
+    LOG_INFO("playerbots", "PlusCraft: Found {} bot account(s) with {} available slots total", accountsToUse.size(), maxCanCreate);
+
+    // Shuffle accounts for randomness
+    std::mt19937 rng(std::chrono::steady_clock::now().time_since_epoch().count());
+    std::shuffle(accountsToUse.begin(), accountsToUse.end(), rng);
+
+    // Build name cache for character creation
+    std::unordered_map<RandomPlayerbotFactory::NameRaceAndGender, std::vector<std::string>> nameCache;
+    QueryResult result = CharacterDatabase.Query("SELECT name, gender FROM playerbots_names");
+    if (result)
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+            std::string name = fields[0].Get<std::string>();
+            RandomPlayerbotFactory::NameRaceAndGender raceAndGender = 
+                static_cast<RandomPlayerbotFactory::NameRaceAndGender>(fields[1].Get<uint8>());
+            if (sObjectMgr->CheckPlayerName(name) == CHAR_NAME_SUCCESS)
+            {
+                CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHECK_NAME);
+                stmt->SetData(0, name);
+                if (!CharacterDatabase.Query(stmt))
+                {
+                    nameCache[raceAndGender].push_back(name);
+                }
+            }
+        } while (result->NextRow());
+    }
+
+    if (nameCache.empty())
+    {
+        LOG_ERROR("playerbots", "PlusCraft: No names available in playerbots_names table!");
+        return 0;
+    }
+
+    // Create characters
+    uint32 created = 0;
+    std::vector<WorldSession*> tempSessions;
+
+    for (uint32 i = 0; i < toCreate && i < accountsToUse.size(); ++i)
+    {
+        uint32 accountId = accountsToUse[i];
+        uint32 charCount = AccountMgr::GetCharactersCount(accountId);
+        if (charCount >= 10)
+            continue;
+
+        // Create temp session for bot creation
+        WorldSession* session = new WorldSession(accountId, "", 0x0, nullptr, SEC_PLAYER, 
+                                                EXPANSION_WRATH_OF_THE_LICH_KING,
+                                                time_t(0), LOCALE_enUS, 0, false, false, 0, true);
+        tempSessions.push_back(session);
+
+        // Select random class
+        std::vector<uint8> validClasses;
+        for (uint8 cls = CLASS_WARRIOR; cls < MAX_CLASSES; ++cls)
+        {
+            if (!((1 << (cls - 1)) & CLASSMASK_ALL_PLAYABLE) || !sChrClassesStore.LookupEntry(cls))
+                continue;
+            if ((1 << (cls - 1)) & sWorld->getIntConfig(CONFIG_CHARACTER_CREATING_DISABLED_CLASSMASK))
+                continue;
+            validClasses.push_back(cls);
+        }
+
+        if (validClasses.empty())
+            continue;
+
+        uint8 cls = validClasses[urand(0, validClasses.size() - 1)];
+
+        RandomPlayerbotFactory factory;
+        Player* playerBot = nullptr;
+        
+        try
+        {
+            playerBot = factory.CreateRandomBot(session, cls, nameCache);
+        }
+        catch (...)
+        {
+            LOG_ERROR("playerbots", "PlusCraft: Exception during CreateRandomBot for account {}", accountId);
+            continue;
+        }
+        
+        if (!playerBot)
+        {
+            LOG_ERROR("playerbots", "PlusCraft: Failed to create character for account {}", accountId);
+            continue;
+        }
+
+        // Set level to be within the bracket
+        uint32 targetLevel = urand(minLevel, maxLevel);
+        if (playerBot->GetLevel() != targetLevel)
+        {
+            playerBot->GiveLevel(targetLevel);
+        }
+
+        try
+        {
+            playerBot->SaveToDB(true, false);
+            sCharacterCache->AddCharacterCacheEntry(playerBot->GetGUID(), accountId, playerBot->GetName(),
+                                                    playerBot->getGender(), playerBot->getRace(),
+                                                    playerBot->getClass(), playerBot->GetLevel());
+            playerBot->CleanupsBeforeDelete();
+            delete playerBot;
+            playerBot = nullptr;
+
+            created++;
+            LOG_INFO("playerbots", "PlusCraft: Created level {} {} bot character on account {}", 
+                    targetLevel, cls, accountId);
+        }
+        catch (...)
+        {
+            LOG_ERROR("playerbots", "PlusCraft: Exception during SaveToDB for account {}", accountId);
+            if (playerBot)
+            {
+                playerBot->CleanupsBeforeDelete();
+                delete playerBot;
+            }
+        }
+    }
+
+    // Wait for database writes
+    if (created > 0)
+    {
+        LOG_INFO("playerbots", "PlusCraft: Waiting for {} character(s) to save to database...", created);
+        while (CharacterDatabase.QueueSize())
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        LOG_INFO("playerbots", "PlusCraft: {} character(s) created successfully", created);
+    }
+
+    // Cleanup temp sessions
+    for (WorldSession* session : tempSessions)
+    {
+        delete session;
+    }
+
+    return created;
+}
+
+// PlusCraft: Remove all PvP-spawned bots
+void RandomPlayerbotMgr::RemovePvPBots()
+{
+    if (!sPlayerbotAIConfig->pluscraftEnabled || pvpSpawnedBots.empty())
+        return;
+
+    LOG_INFO("playerbots", "PlusCraft: Removing {} PvP-spawned bots", pvpSpawnedBots.size());
+
+    std::vector<uint32> botsToRemove(pvpSpawnedBots.begin(), pvpSpawnedBots.end());
+
+    for (uint32 botGuid : botsToRemove)
+    {
+        Player* bot = GetPlayerBot(botGuid);
+        if (bot)
+        {
+            LOG_DEBUG("playerbots", "PlusCraft: Logging out PvP bot {}", bot->GetName());
+            LogoutPlayerBot(ObjectGuid::Create<HighGuid::Player>(botGuid));
+        }
+
+        pvpSpawnedBots.erase(botGuid);
+        pvpBotSpawnTime.erase(botGuid);
+    }
+
+    LOG_INFO("playerbots", "PlusCraft: PvP bot cleanup complete");
+}
+
+// PlusCraft: Remove idle PvP-spawned bots that are no longer needed
+void RandomPlayerbotMgr::CleanupIdlePvPBots()
+{
+    if (!sPlayerbotAIConfig->pluscraftEnabled || pvpSpawnedBots.empty())
+        return;
+
+    time_t now = time(nullptr);
+    time_t timeout = static_cast<time_t>(sPlayerbotAIConfig->pvpBotIdleTimeout);
+    uint32 removed = 0;
+
+    std::vector<uint32> botsToRemove;
+
+    for (auto it = pvpSpawnedBots.begin(); it != pvpSpawnedBots.end();)
+    {
+        uint32 botGuid = *it;
+        Player* bot = GetPlayerBot(botGuid);
+
+        // Remove if bot is offline
+        if (!bot)
+        {
+            it = pvpSpawnedBots.erase(it);
+            pvpBotSpawnTime.erase(botGuid);
+            continue;
+        }
+
+        // Check if bot has exceeded idle timeout
+        time_t spawnTime = pvpBotSpawnTime[botGuid];
+        bool isIdle = false;
+
+        // Check if bot is not in BG/Arena
+        if (!bot->InBattleground() && !bot->InArena())
+        {
+            // Check if bot has been idle for too long
+            if (now - spawnTime > timeout)
+            {
+                isIdle = true;
+            }
+        }
+        else
+        {
+            // Update spawn time while bot is active in PvP
+            pvpBotSpawnTime[botGuid] = now;
+        }
+
+        if (isIdle)
+        {
+            LOG_DEBUG("playerbots", "PlusCraft: Bot {} has been idle for {}s, removing",
+                     bot->GetName(), now - spawnTime);
+            botsToRemove.push_back(botGuid);
+            it = pvpSpawnedBots.erase(it);
+            pvpBotSpawnTime.erase(botGuid);
+            removed++;
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    // Logout idle bots
+    for (uint32 botGuid : botsToRemove)
+    {
+        LogoutPlayerBot(ObjectGuid::Create<HighGuid::Player>(botGuid));
+    }
+
+    if (removed > 0)
+    {
+        LOG_INFO("playerbots", "PlusCraft: Removed {} idle PvP bots", removed);
+    }
 }
 
 void RandomPlayerbotMgr::LoadBattleMastersCache()
@@ -1317,6 +1898,55 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
                      bgInfo.bgAlliancePlayerCount, bgInfo.bgHordePlayerCount, bgInfo.bgAllianceBotCount,
                      bgInfo.bgHordeBotCount, bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount,
                      bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount, bgInfo.bgInstanceCount, bgInfo.activeBgQueue);
+
+            // PlusCraft: Check if we need to spawn bots dynamically for this BG
+            if (sPlayerbotAIConfig->pluscraftEnabled && sPlayerbotAIConfig->bgDynamicSpawn && bgInfo.activeBgQueue > 0)
+            {
+                // Safety check: validate level range
+                if (bgInfo.minLevel == 0 || bgInfo.maxLevel == 0 || bgInfo.minLevel > bgInfo.maxLevel)
+                {
+                    LOG_ERROR("playerbots", "PlusCraft: Invalid level range {}-{} for BG {}", 
+                             bgInfo.minLevel, bgInfo.maxLevel, _bgType);
+                    continue;
+                }
+                
+                uint32 totalPlayers = bgInfo.bgAlliancePlayerCount + bgInfo.bgHordePlayerCount;
+                uint32 totalBots = bgInfo.bgAllianceBotCount + bgInfo.bgHordeBotCount;
+                uint32 totalInQueue = totalPlayers + totalBots;
+
+                // Get BG template to know how many players we need
+                Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+                if (!bgTemplate)
+                {
+                    LOG_ERROR("playerbots", "PlusCraft: Failed to get BG template for type {}", bgTypeId);
+                    continue;
+                }
+                
+                if (totalPlayers > 0)  // Only if real players are queuing
+                {
+                    uint32 minPlayersNeeded = bgTemplate->GetMinPlayersPerTeam() * 2;
+                    
+                    // If we don't have enough total players/bots to start a BG, spawn more
+                    if (totalInQueue < minPlayersNeeded)
+                    {
+                        uint32 botsToSpawn = minPlayersNeeded - totalInQueue;
+                        
+                        LOG_INFO("playerbots", "PlusCraft: {} has {} in queue (need {}), spawning {} bots", 
+                                _bgType, totalInQueue, minPlayersNeeded, botsToSpawn);
+                        
+                        uint32 spawned = AddRandomBotsForPvP(botsToSpawn, bgTypeId, bgInfo.minLevel, bgInfo.maxLevel);
+                        
+                        // Warn if we couldn't spawn enough
+                        if (spawned < botsToSpawn)
+                        {
+                            LOG_WARN("playerbots", "PlusCraft: {} - Only spawned {}/{} bots. BG may not start!", 
+                                    _bgType, spawned, botsToSpawn);
+                            LOG_WARN("playerbots", "         Create more level {}-{} characters on bot accounts",
+                                    bgInfo.minLevel, bgInfo.maxLevel);
+                        }
+                    }
+                }
+            }
         }
     }
     LOG_DEBUG("playerbots", "BG Queue check finished");

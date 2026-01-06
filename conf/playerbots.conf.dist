@@ -2166,6 +2166,49 @@ AiPlayerbot.SummonAtInnkeepersEnabled = 1
 AiPlayerbot.EnableICCBuffs = 1
 
 ###################################################################################################
+# PLUSCRAFT - DYNAMIC PVP BOT SPAWNING
+#
+# PlusCraft feature: Allows dynamic bot spawning for PvP regardless of MinRandomBots/MaxRandomBots limits
+###################################################################################################
+
+#
+#    AiPlayerbot.PlusCraft.Enabled
+#        Description: Enable PlusCraft features (dynamic bot spawning for PvP)
+#        Default:     0 (disabled)
+#                     1 (enabled)
+
+AiPlayerbot.PlusCraft.Enabled = 0
+
+#
+#    AiPlayerbot.Arena.DynamicSpawn
+#        Description: Allow spawning additional bots when players queue for arena,
+#                     even if at MaxRandomBots limit
+#        Default:     1 (enabled)
+#                     0 (disabled)
+#        Note:        Requires AiPlayerbot.PlusCraft.Enabled = 1
+
+AiPlayerbot.Arena.DynamicSpawn = 1
+
+#
+#    AiPlayerbot.BG.DynamicSpawn  
+#        Description: Allow spawning additional bots when players queue for battlegrounds,
+#                     even if at MaxRandomBots limit
+#        Default:     1 (enabled)
+#                     0 (disabled)
+#        Note:        Requires AiPlayerbot.PlusCraft.Enabled = 1
+
+AiPlayerbot.BG.DynamicSpawn = 1
+
+#
+#    AiPlayerbot.PvP.BotIdleTimeout
+#        Description: Time in seconds before idle PvP-spawned bots are automatically removed
+#                     Bots are considered idle when not in an active BG/Arena
+#        Default:     600 (10 minutes)
+#        Note:        Requires AiPlayerbot.PlusCraft.Enabled = 1
+
+AiPlayerbot.PvP.BotIdleTimeout = 600
+
+###################################################################################################
 # PVP AUTO-QUEUE AND BALANCING
 #
 # These settings control automatic bot queue filling for arenas and battlegrounds

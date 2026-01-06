@@ -183,6 +183,13 @@ bool PlayerbotAIConfig::Initialize()
     randomBotAutologin = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotAutologin", true);
     minRandomBots = sConfigMgr->GetOption<int32>("AiPlayerbot.MinRandomBots", 500);
     maxRandomBots = sConfigMgr->GetOption<int32>("AiPlayerbot.MaxRandomBots", 500);
+
+    // PlusCraft: Dynamic PvP bot spawning
+    pluscraftEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.PlusCraft.Enabled", false);
+    arenaDynamicSpawn = sConfigMgr->GetOption<bool>("AiPlayerbot.Arena.DynamicSpawn", true);
+    bgDynamicSpawn = sConfigMgr->GetOption<bool>("AiPlayerbot.BG.DynamicSpawn", true);
+    pvpBotIdleTimeout = sConfigMgr->GetOption<uint32>("AiPlayerbot.PvP.BotIdleTimeout", 10 * MINUTE);
+    
     randomBotUpdateInterval = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotUpdateInterval", 20);
     randomBotCountChangeMinInterval =
         sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotCountChangeMinInterval", 30 * MINUTE);
@@ -209,6 +216,28 @@ bool PlayerbotAIConfig::Initialize()
     maxRandomBotsPriceChangeInterval =
         sConfigMgr->GetOption<int32>("AiPlayerbot.MaxRandomBotsPriceChangeInterval", 48 * HOUR);
     randomBotJoinLfg = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotJoinLfg", true);
+
+    // PlusCraft: Dynamic PvP bot spawning
+    pluscraftEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.PlusCraft.Enabled", false);
+    arenaDynamicSpawn = sConfigMgr->GetOption<bool>("AiPlayerbot.Arena.DynamicSpawn", true);
+    bgDynamicSpawn = sConfigMgr->GetOption<bool>("AiPlayerbot.BG.DynamicSpawn", true);
+    pvpBotIdleTimeout = sConfigMgr->GetOption<uint32>("AiPlayerbot.PvP.BotIdleTimeout", 600);
+
+    // Log PlusCraft configuration
+    if (pluscraftEnabled)
+    {
+        LOG_INFO("playerbots", "╔══════════════════════════════════════════════════════════╗");
+        LOG_INFO("playerbots", "║          PlusCraft Dynamic PvP Spawning ENABLED          ║");
+        LOG_INFO("playerbots", "╟──────────────────────────────────────────────────────────╢");
+        LOG_INFO("playerbots", "║  Arena Dynamic Spawn: {}                               ║", arenaDynamicSpawn ? "ENABLED " : "DISABLED");
+        LOG_INFO("playerbots", "║  BG Dynamic Spawn:    {}                               ║", bgDynamicSpawn ? "ENABLED " : "DISABLED");
+        LOG_INFO("playerbots", "║  Bot Idle Timeout:    {} seconds                      ║", pvpBotIdleTimeout);
+        LOG_INFO("playerbots", "╚══════════════════════════════════════════════════════════╝");
+    }
+    else
+    {
+        LOG_INFO("playerbots", "PlusCraft Dynamic PvP Spawning: DISABLED");
+    }
 
     restrictHealerDPS = sConfigMgr->GetOption<bool>("AiPlayerbot.HealerDPSMapRestriction", false);
     LoadList<std::vector<uint32>>(

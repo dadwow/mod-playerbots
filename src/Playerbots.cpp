@@ -33,6 +33,9 @@
 #include "cs_playerbots.h"
 #include "cmath"
 #include "BattleGroundTactics.h"
+#include "BattlegroundBalancer.h"
+#include "ArenaQueueManager.h"
+#include "BattlegroundMgr.h"
 
 class PlayerbotsDatabaseScript : public DatabaseScript
 {
@@ -91,7 +94,9 @@ public:
         PLAYERHOOK_CAN_PLAYER_USE_GUILD_CHAT,
         PLAYERHOOK_CAN_PLAYER_USE_CHANNEL_CHAT,
         PLAYERHOOK_ON_GIVE_EXP,
-        PLAYERHOOK_ON_BEFORE_TELEPORT
+        PLAYERHOOK_ON_BEFORE_TELEPORT,
+        PLAYERHOOK_ON_PLAYER_JOIN_BG,
+        PLAYERHOOK_ON_PLAYER_JOIN_ARENA
     }) {}
 
     void OnPlayerLogin(Player* player) override
@@ -293,6 +298,36 @@ public:
 
         // otherwise apply bot XP multiplier.
         amount = static_cast<uint32>(std::round(static_cast<float>(amount) * sPlayerbotAIConfig->randomBotXPRate));
+    }
+
+    void OnPlayerJoinBG(Player* player) override
+    {
+        // PlusCraft: Now handled in CheckBgQueue() which has better context
+        // This hook fires too early (before queue processing) and doesn't have bracket info
+        // See RandomPlayerbotMgr::LogBattlegroundInfo() for the new implementation
+        return;
+    }
+
+    void OnPlayerJoinArena(Player* player) override
+    {
+        if (!player || !sPlayerbotAIConfig->pluscraftEnabled || !sPlayerbotAIConfig->arenaDynamicSpawn)
+            return;
+
+        // Don't trigger for bots themselves - use multiple checks for safety
+        if (player->GetSession()->IsBot())
+            return;
+
+        // Additional safety: check if player has bot AI
+        if (GET_PLAYERBOT_AI(player))
+            return;
+
+        LOG_INFO("playerbots", "PlusCraft: Real player {} joined arena queue", player->GetName());
+
+        // Trigger dynamic spawning if enabled
+        // Determine arena type from player's queue
+        uint8 arenaType = 2; // Default to 2v2
+        // TODO: Get actual arena type from queue
+        sArenaQueueMgr.OnPlayerQueueArena(player, arenaType, false);
     }
 };
 

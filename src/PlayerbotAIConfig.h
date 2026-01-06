@@ -223,6 +223,12 @@ public:
     bool randomBotJoinBG;
     bool randomBotAutoJoinBG;
 
+    // PlusCraft: Dynamic PvP bot spawning
+    bool pluscraftEnabled;
+    bool arenaDynamicSpawn;
+    bool bgDynamicSpawn;
+    uint32 pvpBotIdleTimeout;  // Seconds before idle PvP bots are removed
+
     std::string randomBotAutoJoinICBrackets;
     std::string randomBotAutoJoinEYBrackets;
     std::string randomBotAutoJoinAVBrackets;

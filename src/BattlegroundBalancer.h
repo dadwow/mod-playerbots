@@ -77,6 +77,12 @@ public:
     void Update();
 
     /**
+     * Called when a battleground ends to cleanup bots
+     * @param bg The battleground that ended
+     */
+    void OnBattlegroundEnd(Battleground* bg);
+
+    /**
      * Enable/disable battleground auto-balance feature
      * @param enabled true to enable
      */
